@@ -1,0 +1,572 @@
+import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
+import 'package:provider/provider.dart';
+import 'dart:convert';
+import '../providers/bus_provider.dart';
+import '../providers/plane_provider.dart';
+import '../providers/map_state_provider.dart';
+
+// WebView solo su mobile/desktop
+import 'package:webview_flutter/webview_flutter.dart'
+    show WebViewController, WebViewWidget, JavaScriptMode, NavigationDelegate, WebResourceError;
+
+class MapBackground extends StatefulWidget {
+  final dynamic mapController;
+  final dynamic initialCenter;
+
+  const MapBackground({
+    super.key,
+    this.mapController,
+    this.initialCenter,
+  });
+
+  @override
+  State<MapBackground> createState() => _MapBackgroundState();
+}
+
+class _MapBackgroundState extends State<MapBackground> {
+  late WebViewController _webViewController;
+  MapStateProvider? _mapStateProvider;
+  VoidCallback? _mapStateListener;
+
+  @override
+  void initState() {
+    super.initState();
+    // Inizializza WebView solo su piattaforme native (non web)
+    if (!kIsWeb) {
+      _initializeWebView();
+    }
+  }
+
+  @override
+  void dispose() {
+    if (_mapStateProvider != null && _mapStateListener != null) {
+      _mapStateProvider!.removeListener(_mapStateListener!);
+    }
+    super.dispose();
+  }
+
+  void _initializeWebView() {
+    _webViewController = WebViewController()
+      ..setJavaScriptMode(JavaScriptMode.unrestricted)
+      ..setNavigationDelegate(
+        NavigationDelegate(
+          onPageStarted: (String url) {
+            debugPrint('Mapbox WebView: loading $url');
+          },
+          onPageFinished: (String url) {
+            debugPrint('Mapbox WebView: finished loading');
+            _setupMapStateListener();
+          },
+          onWebResourceError: (WebResourceError error) {
+            debugPrint('Mapbox WebView Error: ${error.description}');
+          },
+        ),
+      )
+      ..addJavaScriptChannel(
+        'flutterChannel',
+        onMessageReceived: (message) {
+          _handleWebViewMessage(message.message);
+        },
+      )
+      ..loadHtmlString(
+        _getHtmlContent(),
+        baseUrl: 'https://betacloud-transporter.is-cool.dev/api',
+      );
+  }
+
+  void _setupMapStateListener() {
+    _mapStateProvider = Provider.of<MapStateProvider>(context, listen: false);
+    
+    _mapStateListener = () {
+      if (!mounted) return;
+      
+      // Usa _mapStateProvider! invece di una variabile locale per garantire che usiamo quello che stiamo ascoltando
+      if (_mapStateProvider!.shouldFlyTo) {
+        _webViewController.runJavaScript(
+          'map.flyTo({center: [${_mapStateProvider!.lng}, ${_mapStateProvider!.lat}], zoom: ${_mapStateProvider!.zoom}});'
+        );
+        _mapStateProvider!.resetFlyTo();
+      }
+      if (_mapStateProvider!.jsToRun != null) {
+        _webViewController.runJavaScript(_mapStateProvider!.jsToRun!);
+        _mapStateProvider!.resetJs();
+      }
+    };
+
+    _mapStateProvider!.addListener(_mapStateListener!);
+  }
+
+  void _handleWebViewMessage(String message) {
+    if (!mounted) return;
+    
+    if (message.startsWith('bus_selected:')) {
+      final busId = message.replaceFirst('bus_selected:', '');
+      debugPrint('Bus selected: $busId');
+    } else if (message.startsWith('plane_selected:')) {
+      final planeId = message.replaceFirst('plane_selected:', '');
+      debugPrint('Plane selected: $planeId');
+    } else if (message == 'map_ready') {
+      debugPrint('Mapbox loaded successfully');
+      _updateMarkers();
+    }
+  }
+
+  void _updateMarkers() {
+    if (!mounted) return;
+    
+    final busProvider = Provider.of<BusProvider>(context, listen: false);
+    final planeProvider = Provider.of<PlaneProvider>(context, listen: false);
+
+    if (busProvider.vehicles.isNotEmpty) {
+      _updateBusMarkers(busProvider.vehicles);
+    }
+
+    if (planeProvider.flights.isNotEmpty) {
+      _updatePlaneMarkers(planeProvider.flights);
+    }
+  }
+
+  void _updateBusMarkers(List<dynamic> vehicles) {
+    if (!mounted || kIsWeb) return;
+
+    final busesList = vehicles
+        .where((v) => v.latitude != 0.0 && v.longitude != 0.0)
+        .map((v) => {
+              'id': v.id,
+              'line': v.line,
+              'latitude': v.latitude,
+              'longitude': v.longitude,
+              'speed': v.speed ?? 0,
+            })
+        .toList();
+
+    try {
+      // Passiamo direttamente il JSON della lista, non una stringa codificata due volte
+      _webViewController.runJavaScript(
+        'updateBusMarkers(${jsonEncode(busesList)})',
+      );
+    } catch (e) {
+      debugPrint('Error updating bus markers: $e');
+    }
+  }
+
+  void _updatePlaneMarkers(List<dynamic> flights) {
+    if (!mounted || kIsWeb) return;
+
+    final planesList = flights
+        .where((f) => f.latitude != 0.0 && f.longitude != 0.0)
+        .map((f) => {
+              'id': f.id,
+              'callsign': f.callsign,
+              'latitude': f.latitude,
+              'longitude': f.longitude,
+              'altitude': f.altitude ?? 0,
+              'speed': f.speed ?? 0,
+              'heading': f.heading ?? 0,
+            })
+        .toList();
+
+    try {
+      _webViewController.runJavaScript(
+        'updatePlaneMarkers(${jsonEncode(planesList)})',
+      );
+    } catch (e) {
+      debugPrint('Error updating plane markers: $e');
+    }
+  }
+
+  String _getHtmlContent() {
+    return '''
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BC Transporter Map</title>
+    
+    <script src='https://api.mapbox.com/mapbox-gl-js/v3.0.1/mapbox-gl.js'></script>
+    <link href='https://api.mapbox.com/mapbox-gl-js/v3.0.1/mapbox-gl.css' rel='stylesheet' />
+    
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        html, body {
+            height: 100%;
+            width: 100%;
+            overflow: hidden;
+            background: #000;
+        }
+        
+        #map {
+            height: 100%;
+            width: 100%;
+            background: #0a0e27;
+        }
+        
+        #loading {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: #0a0e27;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-family: sans-serif;
+            z-index: 1000;
+        }
+        
+        .mapboxgl-popup-content {
+            background: #1c1c1e;
+            color: #ffffff;
+            border-radius: 12px;
+            padding: 12px 16px;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+        }
+        
+        .mapboxgl-popup-close-button {
+            color: #aeaeb2;
+        }
+        
+        .mapboxgl-popup-close-button:hover {
+            color: #ffffff;
+        }
+        
+        .popup-info {
+            font-size: 14px;
+            line-height: 1.4;
+        }
+        
+        .popup-title {
+            font-weight: 600;
+            margin-bottom: 8px;
+            font-size: 16px;
+        }
+        
+        .popup-detail {
+            font-size: 12px;
+            color: #aeaeb2;
+            margin-top: 4px;
+        }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+    <div id="loading">⏳ Caricamento mappa...</div>
+    
+    <script>
+        console.log('Mapbox script starting...');
+        
+        // Verifica se mapboxgl è disponibile
+        if (typeof mapboxgl === 'undefined') {
+            console.error('Mapbox GL JS non è stato caricato');
+            document.getElementById('loading').innerHTML = '❌ Errore: Mapbox non caricato';
+        } else {
+            console.log('Mapbox GL JS disponibile, versione:', mapboxgl.version);
+        }
+        
+        // Imposta token
+        mapboxgl.accessToken = 'pk.eyJ1IjoiY3V6aW1tYXJ0aW4iLCJhIjoiY204dGRyb3AxMDgxcDJrc2VjeXVwNXN3NyJ9.VR8xzsuQJ_-0h95CN_UD8g';
+        
+        // Aspetta che il DOM sia pronto
+        window.addEventListener('load', function() {
+            console.log('Window load event fired');
+            initializeMap();
+        });
+        
+        // Fallback se load non si attiva
+        setTimeout(function() {
+            if (!window.mapInitialized) {
+                console.log('Timeout - initializing map');
+                initializeMap();
+            }
+        }, 3000);
+        
+        let map = null;
+        let busMarkers = {};
+        let planeMarkers = {};
+        
+        function initializeMap() {
+            if (window.mapInitialized) return;
+            window.mapInitialized = true;
+            
+            console.log('Initializing map...');
+            
+            try {
+                const mapContainer = document.getElementById('map');
+                if (!mapContainer) {
+                    console.error('Map container non trovato');
+                    return;
+                }
+                
+                map = new mapboxgl.Map({
+                    container: mapContainer,
+                    style: 'mapbox://styles/mapbox/dark-v11',
+                    center: [12.4964, 41.9028],
+                    zoom: 6,
+                    projection: 'mercator'
+                });
+                
+                map.on('load', function() {
+                    console.log('Map loaded successfully');
+                    document.getElementById('loading').style.display = 'none';
+                    
+                    // Notifica a Flutter
+                    if (window.flutterChannel) {
+                        window.flutterChannel.postMessage('map_ready');
+                    }
+                });
+                
+                map.on('error', function(error) {
+                    console.error('Map error:', error);
+                    document.getElementById('loading').innerHTML = '❌ Errore mappa: ' + error.message;
+                });
+                
+                // Timeout per il caricamento della mappa
+                setTimeout(function() {
+                    if (map && !map.loaded()) {
+                        console.log('Map loading timeout - forcing display');
+                        document.getElementById('loading').style.display = 'none';
+                    }
+                }, 5000);
+                
+            } catch (error) {
+                console.error('Error initializing map:', error);
+                document.getElementById('loading').innerHTML = '❌ Errore: ' + error.message;
+            }
+        }
+        
+        window.updateBusMarkers = function(buses) {
+            console.log('updateBusMarkers called');
+            if (!map) {
+                console.warn('Map not ready');
+                return;
+            }
+            
+            try {
+                // Rimosso JSON.parse perché ora passiamo l'oggetto direttamente
+                console.log('Updating', buses.length, 'bus markers');
+                
+                const currentBusIds = new Set(buses.map(b => b.id));
+                Object.keys(busMarkers).forEach(busId => {
+                    if (!currentBusIds.has(busId)) {
+                        busMarkers[busId].remove();
+                        delete busMarkers[busId];
+                    }
+                });
+                
+                buses.forEach(bus => {
+                    if (bus.latitude === 0 || bus.longitude === 0) return;
+                    
+                    const busId = bus.id;
+                    const el = document.createElement('div');
+                    el.style.width = '36px';
+                    el.style.height = '36px';
+                    el.style.backgroundImage = 'url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 24 24%27 fill=%27%23FF9500%27%3E%3Cpath d=%27M18 18.5a1.5 1.5 0 0 1-1.5-1.5 1.5 1.5 0 0 1 1.5-1.5 1.5 1.5 0 0 1 1.5 1.5 1.5 1.5 0 0 1-1.5 1.5M16.5 6h-9a1.5 1.5 0 0 0-1.5 1.5v10h2a2.5 2.5 0 0 1 2.5-2.5 2.5 2.5 0 0 1 2.5 2.5h5V7.5a1.5 1.5 0 0 0-1.5-1.5M6 18.5a1.5 1.5 0 0 1-1.5-1.5 1.5 1.5 0 0 1 1.5-1.5 1.5 1.5 0 0 1 1.5 1.5 1.5 1.5 0 0 1-1.5 1.5M17 10.5h-10v-2h10v2z%27/%3E%3C/svg%3E")';
+                    el.style.backgroundSize = 'contain';
+                    el.style.backgroundRepeat = 'no-repeat';
+                    el.style.backgroundPosition = 'center';
+                    el.style.cursor = 'pointer';
+                    
+                    const popup = new mapboxgl.Popup({ offset: 25 })
+                        .setHTML(`
+                            <div class="popup-info">
+                                <div class="popup-title">🚌 Linea \${bus.line}</div>
+                                <div class="popup-detail">Velocità: \${Math.round(bus.speed || 0)} km/h</div>
+                            </div>
+                        `);
+                    
+                    if (busMarkers[busId]) {
+                        busMarkers[busId].setLngLat([bus.longitude, bus.latitude]);
+                    } else {
+                        const marker = new mapboxgl.Marker({ element: el })
+                            .setLngLat([bus.longitude, bus.latitude])
+                            .setPopup(popup)
+                            .addTo(map);
+                        busMarkers[busId] = marker;
+                    }
+                    
+                    el.addEventListener('click', () => {
+                        if (window.flutterChannel) {
+                            window.flutterChannel.postMessage('bus_selected:' + busId);
+                        }
+                    });
+                });
+            } catch (e) {
+                console.error('Error updating bus markers:', e);
+            }
+        };
+        
+        window.updatePlaneMarkers = function(planes) {
+            console.log('updatePlaneMarkers called');
+            if (!map) {
+                console.warn('Map not ready');
+                return;
+            }
+            
+            try {
+                // Rimosso JSON.parse perché ora passiamo l'oggetto direttamente
+                console.log('Updating', planes.length, 'plane markers');
+                
+                const currentPlaneIds = new Set(planes.map(p => p.id));
+                Object.keys(planeMarkers).forEach(planeId => {
+                    if (!currentPlaneIds.has(planeId)) {
+                        planeMarkers[planeId].remove();
+                        delete planeMarkers[planeId];
+                    }
+                });
+                
+                planes.forEach(plane => {
+                    if (plane.latitude === 0 || plane.longitude === 0) return;
+                    
+                    const planeId = plane.id;
+                    const el = document.createElement('div');
+                    el.style.width = '32px';
+                    el.style.height = '32px';
+                    el.style.backgroundImage = 'url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 24 24%27 fill=%27%23FFEB3B%27%3E%3Cpath d=%27M21 16v-2l-8-5V3.5c0-.83-.67-1.5-1.5-1.5S10 2.67 10 3.5V9l-8 5v2l8-2.5v2.5c0 .83.67 1.5 1.5 1.5s1.5-.67 1.5-1.5v-2.5l8 2.5z%27/%3E%3C/svg%3E")';
+                    el.style.backgroundSize = 'contain';
+                    el.style.backgroundRepeat = 'no-repeat';
+                    el.style.backgroundPosition = 'center';
+                    el.style.cursor = 'pointer';
+                    
+                    if (plane.heading) {
+                        el.style.transform = `rotate(\${plane.heading}deg)`;
+                    }
+                    
+                    const popup = new mapboxgl.Popup({ offset: 25 })
+                        .setHTML(`
+                            <div class="popup-info">
+                                <div class="popup-title">✈️ \${plane.callsign || 'N/A'}</div>
+                                <div class="popup-detail">Altitudine: \${Math.round(plane.altitude || 0)} m</div>
+                                <div class="popup-detail">Velocità: \${Math.round(plane.speed || 0)} km/h</div>
+                            </div>
+                        `);
+                    
+                    if (planeMarkers[planeId]) {
+                        planeMarkers[planeId].setLngLat([plane.longitude, plane.latitude]);
+                    } else {
+                        const marker = new mapboxgl.Marker({ element: el })
+                            .setLngLat([plane.longitude, plane.latitude])
+                            .setPopup(popup)
+                            .addTo(map);
+                        planeMarkers[planeId] = marker;
+                    }
+                    
+                    el.addEventListener('click', () => {
+                        if (window.flutterChannel) {
+                            window.flutterChannel.postMessage('plane_selected:' + planeId);
+                        }
+                    });
+                });
+            } catch (e) {
+                console.error('Error updating plane markers:', e);
+            }
+        };
+        
+        window.centerMap = function(lng, lat, zoom) {
+            if (!map) {
+                console.warn('Map not ready');
+                return;
+            }
+            map.flyTo({
+                center: [parseFloat(lng), parseFloat(lat)],
+                zoom: parseFloat(zoom) || 12,
+                duration: 1000
+            });
+        };
+
+        // Train Highlighting Logic
+        window.highlightTrain = function(trainNumber, tripId) {
+            console.log('Highlighting train:', trainNumber, tripId);
+            if (!map) return;
+            
+            // Per ora centriamo solo la mappa, ma in futuro possiamo aggiungere il marker del treno
+            // se riceviamo le coordinate dal provider
+            // Se abbiamo tripId, possiamo chiamare l'API per ottenere la posizione attuale
+            if (tripId) {
+                fetch('https://prod.cuzimmartin.dev/api/IT/trip?tripId=' + encodeURIComponent(tripId))
+                .then(r => r.json())
+                .then(data => {
+                    const trip = data.trip || data.data || data;
+                    if (trip.location && trip.location.latitude) {
+                        window.centerMap(trip.location.longitude, trip.location.latitude, 11);
+                        
+                        // Aggiungi marker temporaneo
+                        new mapboxgl.Marker({ color: '#3b82f6' })
+                            .setLngLat([trip.location.longitude, trip.location.latitude])
+                            .setPopup(new mapboxgl.Popup().setHTML('<b>Treno ' + trainNumber + '</b>'))
+                            .addTo(map);
+                    }
+                })
+                .catch(err => console.error('Errore highlight train:', err));
+            }
+        };
+        
+        console.log('Mapbox script initialized');
+    </script>
+</body>
+</html>
+    ''';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // Usiamo Selector per ricostruire la UI (e inviare JS) SOLO quando cambiano i dati rilevanti
+    return Selector2<BusProvider, PlaneProvider, MapData>(
+      selector: (context, busP, planeP) => MapData(busP.vehicles, planeP.flights),
+      shouldRebuild: (prev, next) => 
+          prev.busVehicles != next.busVehicles || prev.planeFlights != next.planeFlights,
+      builder: (context, data, child) {
+        // Se siamo su web, mostra placeholder
+        if (kIsWeb) {
+          return _buildWebPlaceholder();
+        }
+
+        // Su mobile/desktop, aggiorna i marker
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (data.busVehicles.isNotEmpty) {
+            _updateBusMarkers(data.busVehicles);
+          }
+          if (data.planeFlights.isNotEmpty) {
+            _updatePlaneMarkers(data.planeFlights);
+          }
+        });
+
+        return WebViewWidget(controller: _webViewController);
+      },
+    );
+  }
+
+  Widget _buildWebPlaceholder() {
+    return Container(
+      color: const Color(0xFF121212),
+      child: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.map, size: 48, color: Colors.blue),
+            const SizedBox(height: 16),
+            const Text(
+              'Mapbox su Web non disponibile',
+              style: TextStyle(color: Colors.white70, fontSize: 16),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class MapData {
+  final List<dynamic> busVehicles;
+  final List<dynamic> planeFlights;
+  MapData(this.busVehicles, this.planeFlights);
+}

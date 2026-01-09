@@ -1,0 +1,93 @@
+import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import 'core/app_theme.dart';
+import 'features/bus/presentation/providers/bus_provider.dart';
+import 'features/plane/presentation/providers/plane_provider.dart';
+import 'features/train/presentation/providers/train_provider.dart';
+import 'presentation/providers/config_provider.dart';
+import 'presentation/providers/settings_provider.dart';
+import 'presentation/providers/map_state_provider.dart';
+import 'presentation/screens/home_screen.dart';
+
+void main() {
+  runApp(const BcTransporterApp());
+}
+
+/// App principale BC Transporter con gestione del salvataggio posizione mappa.
+///
+/// Modifiche implementate per il salvataggio posizione:
+/// - ✅ StatefulWidget invece di StatelessWidget per gestire il lifecycle
+/// - ✅ WidgetsBindingObserver per monitorare lo stato dell'app
+/// - ✅ Salvataggio automatico della posizione quando l'app va in background
+/// - ✅ Salvataggio quando l'app viene chiusa o messa in pausa
+class BcTransporterApp extends StatefulWidget {
+  const BcTransporterApp({super.key});
+
+  @override
+  State<BcTransporterApp> createState() => _BcTransporterAppState();
+}
+
+class _BcTransporterAppState extends State<BcTransporterApp> with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    
+    // Salva la posizione della mappa quando l'app viene messa in background o chiusa
+    if (state == AppLifecycleState.paused || 
+        state == AppLifecycleState.detached || 
+        state == AppLifecycleState.inactive) {
+      final mapStateProvider = Provider.of<MapStateProvider>(context, listen: false);
+      mapStateProvider.saveCurrentPosition();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return MultiProvider(
+      providers: [
+        ChangeNotifierProvider(create: (_) => SettingsProvider()),
+        ChangeNotifierProvider(create: (_) => ConfigProvider()),
+        ChangeNotifierProxyProvider<SettingsProvider, TrainProvider>(
+          create: (_) => TrainProvider(),
+          update: (_, settings, train) {
+            train!.updateAutoRefresh(settings.trainRefreshSeconds);
+            return train;
+          },
+        ),
+        ChangeNotifierProxyProvider<SettingsProvider, BusProvider>(
+          create: (_) => BusProvider(),
+          update: (_, settings, bus) {
+            bus!.updateAutoRefresh(settings.busRefreshSeconds);
+            return bus;
+          },
+        ),
+        ChangeNotifierProxyProvider<SettingsProvider, PlaneProvider>(
+          create: (_) => PlaneProvider(),
+          update: (_, settings, plane) {
+            plane!.updateAutoRefresh(settings.planeRefreshSeconds);
+            return plane;
+          },
+        ),
+        ChangeNotifierProvider(create: (_) => MapStateProvider()),
+      ],
+      child: MaterialApp(
+        title: 'BC Transporter',
+        debugShowCheckedModeBanner: false,
+        theme: AppTheme.darkTheme, 
+        home: const HomeScreen(),
+      ),
+    );
+  }
+}

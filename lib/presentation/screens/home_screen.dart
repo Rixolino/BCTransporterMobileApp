@@ -1,0 +1,495 @@
+import 'package:flutter/material.dart';
+import 'package:sliding_up_panel/sliding_up_panel.dart';
+import 'package:glassmorphism/glassmorphism.dart';
+import 'package:provider/provider.dart';
+import '../providers/config_provider.dart';
+import '../../features/bus/presentation/providers/bus_provider.dart';
+import '../../features/plane/presentation/providers/plane_provider.dart';
+import '../../features/train/presentation/providers/train_provider.dart';
+import '../providers/map_state_provider.dart';
+import '../../features/bus/presentation/widgets/bus_panel_content.dart';
+import '../../features/plane/presentation/widgets/plane_panel_content.dart';
+import '../../features/train/presentation/widgets/train_panel_content.dart';
+import '../widgets/map_background.dart';
+
+import 'settings_screen.dart';
+
+class HomeScreen extends StatefulWidget {
+  const HomeScreen({super.key});
+
+  @override
+  State<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+  final PanelController _panelController = PanelController();
+  final TextEditingController _searchController = TextEditingController();
+  
+  // 0: Trains, 1: Buses, 2: Planes
+  int _selectedModeIndex = 0; 
+  bool _searchByNumber = false;
+
+  void _openSettings() {
+    Navigator.of(context).push(
+      PageRouteBuilder(
+        pageBuilder: (context, animation, secondaryAnimation) => const SettingsScreen(),
+        transitionsBuilder: (context, animation, secondaryAnimation, child) {
+          const begin = Offset(1.0, 0.0);
+          const end = Offset.zero;
+          const curve = Curves.easeInOutQuart;
+
+          var tween = Tween(begin: begin, end: end).chain(CurveTween(curve: curve));
+
+          return SlideTransition(
+            position: animation.drive(tween),
+            child: child,
+          );
+        },
+      ),
+    );
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  void _onSearch(String query) {
+    if (query.isEmpty) return;
+
+    if (_selectedModeIndex == 0) {
+      final trainProvider = Provider.of<TrainProvider>(context, listen: false);
+      if (_searchByNumber) {
+        trainProvider.searchTrainByNumber(query);
+      } else {
+        trainProvider.searchStations(query);
+      }
+    } else if (_selectedModeIndex == 1) {
+      // Implement bus search if needed
+    } else if (_selectedModeIndex == 2) {
+      final planeProvider = Provider.of<PlaneProvider>(context, listen: false);
+      planeProvider.searchAirports(query);
+    }
+
+    // Apri il pannello per mostrare i risultati
+    if (!_panelController.isPanelOpen) {
+      _panelController.open();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final configProvider = Provider.of<ConfigProvider>(context);
+    final config = configProvider.config;
+
+    return Scaffold(
+      body: SlidingUpPanel(
+        controller: _panelController,
+        borderRadius: const BorderRadius.only(
+          topLeft: Radius.circular(24.0),
+          topRight: Radius.circular(24.0),
+        ),
+        minHeight: 120, // Altezza quando collassato (dock)
+        maxHeight: MediaQuery.of(context).size.height * 0.7, // Altezza massima
+        color: const Color(0xFF1E1E1E).withOpacity(0.95), // Background scuro semitrasparente
+        boxShadow: [
+          BoxShadow(
+            blurRadius: 20.0,
+            color: Colors.black.withOpacity(0.2),
+          ),
+        ],
+        // IL CONTENT DEL PANNELLO (SHEET)
+        panel: _buildPanelContent(config),
+        
+        // LA MAPPA E L'UI DI SFONDO
+        body: Stack(
+          children: [
+            // 1. Mappa a schermo intero
+            MapBackground(),
+
+            // 2. Barra di ricerca Floating
+            Positioned(
+              top: MediaQuery.of(context).padding.top + 10,
+              left: 16,
+              right: 16,
+              child: Row(
+                children: [
+                   Expanded(child: _buildSearchBar()),
+                   const SizedBox(width: 8),
+                   _buildMapStyleButton(),
+                   const SizedBox(width: 8),
+                   GestureDetector(
+                     onTap: _openSettings,
+                     child: Container(
+                       padding: const EdgeInsets.all(12),
+                       decoration: BoxDecoration(
+                         color: const Color(0xFF1E1E1E).withOpacity(0.9),
+                         borderRadius: BorderRadius.circular(16),
+                         border: Border.all(color: Colors.white.withOpacity(0.1)),
+                         boxShadow: [
+                           BoxShadow(
+                             color: Colors.black.withOpacity(0.3),
+                             blurRadius: 10,
+                             offset: const Offset(0, 4),
+                           )
+                         ]
+                       ),
+                       child: const Icon(Icons.settings, color: Colors.white),
+                     ),
+                   )
+                ],
+              ),
+            ),
+
+            // 3. Loading Indicator se necessario
+            if (configProvider.isLoading)
+              const Center(
+                child: CircularProgressIndicator(),
+              ),
+
+            // 4. Indicatore di trascinamento (debug)
+            Positioned(
+              bottom: 0,
+              left: 0,
+              right: 0,
+              child: Container(
+                height: 20,
+                color: Colors.red.withOpacity(0.3),
+                child: Center(
+                  child: Text(
+                    'Scorri verso l\'alto',
+                    style: TextStyle(color: Colors.white, fontSize: 10),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // --- Widgets UI ---
+
+  Widget _buildMapStyleButton() {
+    final mapState = Provider.of<MapStateProvider>(context);
+    
+    IconData styleIcon;
+    String nextStyle;
+    String toastMessage;
+
+    if (mapState.mapStyle == 'streets-v12') {
+      styleIcon = Icons.dark_mode;
+      nextStyle = 'dark-v11';
+      toastMessage = "Mappa Scura";
+    } else if (mapState.mapStyle == 'dark-v11') {
+      styleIcon = Icons.terrain;
+      nextStyle = 'satellite-streets-v12';
+      toastMessage = "Mappa 3D / Satellite";
+    } else {
+      styleIcon = Icons.map;
+      nextStyle = 'streets-v12';
+      toastMessage = "Mappa Normale";
+    }
+
+    return GestureDetector(
+      onTap: () {
+        mapState.setMapStyle(nextStyle);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(toastMessage),
+            duration: const Duration(seconds: 1),
+            behavior: SnackBarBehavior.floating,
+            width: 200,
+          ),
+        );
+      },
+      child: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: const Color(0xFF1E1E1E).withOpacity(0.9),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: Colors.white.withOpacity(0.1)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.3),
+              blurRadius: 10,
+              offset: const Offset(0, 4),
+            )
+          ]
+        ),
+        child: Icon(styleIcon, color: Colors.white),
+      ),
+    );
+  }
+
+  Widget _buildSearchBar() {
+    return GlassmorphicContainer(
+      width: double.infinity,
+      height: 60,
+      borderRadius: 20,
+      blur: 20,
+      alignment: Alignment.center,
+      border: 2,
+      linearGradient: LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: [
+          const Color(0xFF1E1E1E).withOpacity(0.6),
+          const Color(0xFF1E1E1E).withOpacity(0.4),
+        ],
+      ),
+      borderGradient: LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: [
+          Colors.white.withOpacity(0.3),
+          Colors.white.withOpacity(0.1),
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 10),
+        child: Row(
+          children: [
+            if (_selectedModeIndex == 0) // Solo per treni mostriamo il toggle numero
+              IconButton(
+                icon: Icon(
+                  _searchByNumber ? Icons.pin : Icons.location_on,
+                  color: _searchByNumber ? Colors.blueAccent : Colors.white,
+                ),
+                onPressed: () {
+                  setState(() {
+                    _searchByNumber = !_searchByNumber;
+                  });
+                },
+                tooltip: _searchByNumber ? "Cerca per Numero" : "Cerca per Stazione",
+              )
+            else
+              const Padding(
+                padding: EdgeInsets.all(12.0),
+                child: Icon(Icons.search, color: Colors.white),
+              ),
+            const SizedBox(width: 5),
+            Expanded(
+              child: TextField(
+                controller: _searchController,
+                style: const TextStyle(color: Colors.white),
+                onSubmitted: _onSearch,
+                textInputAction: TextInputAction.search,
+                decoration: InputDecoration(
+                  hintText: _getSearchHint(),
+                  hintStyle: const TextStyle(color: Colors.white70, fontSize: 14),
+                  border: InputBorder.none,
+                ),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: Colors.blueAccent.withOpacity(0.4),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.person, color: Colors.white),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _getSearchHint() {
+    switch (_selectedModeIndex) {
+      case 0: return _searchByNumber ? "N. Treno (es: 9610)" : "Stazione (es: Roma Termini)";
+      case 1: return "Cerca fermata bus...";
+      case 2: return "Cerca volo o aeroporto...";
+      default: return "Cerca destinazione...";
+    }
+  }
+
+  Widget _buildPanelContent(dynamic config) {
+    if (config == null) return const SizedBox();
+
+    return Column(
+      children: [
+        const SizedBox(height: 12),
+        // Handle per il drag
+        Container(
+          width: 40,
+          height: 4,
+          decoration: BoxDecoration(
+            color: Colors.grey[600],
+            borderRadius: BorderRadius.circular(2),
+          ),
+        ),
+        const SizedBox(height: 20),
+        
+        // Selettore Modalità (Treni/Bus/Aerei)
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+          children: [
+            _buildModeButton(0, Icons.train, "Treni", true),
+            _buildModeButton(1, Icons.directions_bus, "Bus", true),
+            _buildModeButton(2, Icons.flight, "Aerei", true),
+          ],
+        ),
+        
+        const Divider(color: Colors.white12, height: 40),
+
+        // Contenuto dinamico in base alla selezione
+        Expanded(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24),
+            child: _buildDynamicList(),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildModeButton(int index, IconData icon, String label, bool enabled) {
+    if (!enabled) return const SizedBox.shrink();
+    final isSelected = _selectedModeIndex == index;
+
+    return GestureDetector(
+      onTap: () {
+        if (_selectedModeIndex != index) {
+          // Cancella elementi dalla mappa quando si cambia trasporto
+          Provider.of<TrainProvider>(context, listen: false).clearAll();
+          Provider.of<BusProvider>(context, listen: false).clearAll();
+          Provider.of<PlaneProvider>(context, listen: false).clearAll();
+          _searchController.clear();
+        }
+
+        setState(() {
+          _selectedModeIndex = index;
+          // Apriamo leggermente il pannello se si cambia modalità
+          _panelController.open(); 
+        });
+        
+        // Notifichiamo il MapStateProvider per resettare la vista
+        Provider.of<MapStateProvider>(context, listen: false).setCategory(index);
+      },
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 300),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        decoration: BoxDecoration(
+          color: isSelected ? Colors.blueAccent.withOpacity(0.2) : Colors.transparent,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: isSelected ? Colors.blueAccent : Colors.transparent,
+          ),
+        ),
+        child: Column(
+          children: [
+            Icon(
+              icon,
+              color: isSelected ? Colors.blueAccent : Colors.white54,
+              size: 28,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              label,
+              style: TextStyle(
+                color: isSelected ? Colors.white : Colors.white54,
+                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                fontSize: 12,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDynamicList() {
+    if (_selectedModeIndex == 0) {
+      return const TrainPanelContent();
+    }
+    if (_selectedModeIndex == 1) {
+      return const BusPanelContent();
+    }
+    if (_selectedModeIndex == 2) {
+      return PlanePanelContent(
+        onRefresh: () {
+          final planeProvider = Provider.of<PlaneProvider>(context, listen: false);
+          final mapState = Provider.of<MapStateProvider>(context, listen: false);
+          // Scansiona l'area visibile sulla mappa
+          planeProvider.scanAreaForFlights(mapState.lat, mapState.lng, mapState.zoom);
+        },
+      );
+    }
+  
+    // Default / Recenti
+    return ListView(
+      children: [
+        Text(
+          "Recenti",
+          style: TextStyle(
+            color: Colors.white.withOpacity(0.8),
+            fontSize: 18,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        const SizedBox(height: 16),
+        _buildListItem(Icons.history, "Bari Centrale -> Roma Termini", "Treno • Ieri"),
+        _buildListItem(Icons.history, "Piazza Moro -> Via Sparano", "Bus • Oggi"),
+        const SizedBox(height: 24),
+        Text(
+          "Vicino a te",
+          style: TextStyle(
+            color: Colors.white.withOpacity(0.8),
+            fontSize: 18,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        const SizedBox(height: 16),
+        _buildListItem(Icons.location_on, "Fermata Via Capruzzi", "200m • Bus"),
+        _buildListItem(Icons.local_airport, "Aeroporto Karol Wojtyła", "10km • Aereo"),
+      ],
+    );
+  }
+
+  Widget _buildListItem(IconData icon, String title, String subtitle) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.05),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(icon, color: Colors.white70),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 16,
+                  ),
+                ),
+                Text(
+                  subtitle,
+                  style: TextStyle(
+                    color: Colors.white.withOpacity(0.5),
+                    fontSize: 14,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Icon(Icons.chevron_right, color: Colors.white.withOpacity(0.3)),
+        ],
+      ),
+    );
+  }
+}
