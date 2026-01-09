@@ -134,7 +134,7 @@ class SettingsScreen extends StatelessWidget {
               value: currentValue.toDouble(),
               min: 0,
               max: 300,
-              divisions: 10, // 0, 30, 60... 300
+              divisions: 20, // 0, 15, 30... 300
               label: currentValue > 0 ? '$currentValue sec' : 'Disabilitato',
               onChanged: onChanged,
             ),

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/train_provider.dart';
 import '../../../../presentation/providers/map_state_provider.dart';
+import 'train_details_sheet.dart';
 import 'package:intl/intl.dart';
 
 class TrainPanelContent extends StatefulWidget {
@@ -14,6 +15,21 @@ class TrainPanelContent extends StatefulWidget {
 class _TrainPanelContentState extends State<TrainPanelContent> {
   final TextEditingController _searchController = TextEditingController();
   String _selectedCountry = 'IT';
+
+  // Mappa dei fusi orari (Offset rispetto a UTC)
+  final Map<String, int> countryTimezoneOffsets = {
+    'IT': 1, 'FR': 1, 'DE': 1, 'AT': 1, 'CH': 1, 'ES': 1,
+    'GB': 0, 'NL': 1, 'BE': 1, 'LU': 1, 'CZ': 1, 'PL': 1,
+    'HU': 1, 'RO': 2, 'GR': 2, 'SE': 1, 'NO': 1, 'DK': 1,
+  };
+
+  // Helper per formattare l'orario nel fuso della stazione
+  String _formatStationTime(DateTime? date, String countryCode) {
+    if (date == null) return '--:--';
+    final int offset = countryTimezoneOffsets[countryCode] ?? 1;
+    final stationTime = date.toUtc().add(Duration(hours: offset));
+    return DateFormat('HH:mm').format(stationTime);
+  }
 
   final List<Map<String, String>> _countries = [
     {'code': 'IT', 'name': 'Italia'},
@@ -73,90 +89,113 @@ class _TrainPanelContentState extends State<TrainPanelContent> {
                       final dep = trainProvider.departures[index];
                       final isArrival = trainProvider.isArrivalMode;
                       
-                      return ExpansionTile(
-                        iconColor: Colors.white,
-                        collapsedIconColor: Colors.white54,
-                        onExpansionChanged: (expanded) {
-                           if (expanded) trainProvider.expandTrainDetails(index);
-                        },
-                        leading: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Text(
-                              dep.scheduledTime != null ? DateFormat('HH:mm').format(dep.scheduledTime!) : '--:--',
-                              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
-                            ),
-                            if (dep.isDelayed)
-                              Text(
-                                "+${dep.delayMinutes}'",
-                                style: const TextStyle(color: Colors.redAccent, fontSize: 12),
-                              ),
-                          ],
-                        ),
-                        title: Text(
-                          "${dep.category ?? ''} ${dep.trainNumber ?? ''} ${isArrival ? 'da' : '->'} ${isArrival ? dep.origin ?? '' : dep.destination ?? ''}",
-                          style: const TextStyle(color: Colors.white),
-                        ),
-                        subtitle: Text(
-                          "Binario: ${dep.platform ?? '?'}",
-                          style: const TextStyle(color: Colors.white70),
-                        ),
-                        children: [
-                          if (dep.stops == null)
-                             const Padding(
-                               padding: EdgeInsets.all(8.0),
-                               child: CircularProgressIndicator(strokeWidth: 2),
-                             )
-                          else if (dep.stops!.isEmpty)
-                             const Padding(
-                               padding: EdgeInsets.all(8.0),
-                               child: Text("Nessuna fermata trovata", style: TextStyle(color: Colors.white54)),
-                             )
-                          else
-                             ...dep.stops!.map((stop) {
-                               final isDelayed = (stop.delay is int && stop.delay! > 0);
-                               return ListTile(
-                                dense: true,
-                                leading: Icon(Icons.radio_button_checked, size: 12, color: Colors.blueAccent.withOpacity(0.6)),
-                                title: Text(stop.stationName, style: const TextStyle(color: Colors.white, fontSize: 14)),
-                                subtitle: Row(
+                      return Card(
+                        color: Colors.white.withOpacity(0.05),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
+                        child: InkWell(
+                          borderRadius: BorderRadius.circular(12),
+                          onTap: () {
+                             final String? targetId = dep.tripId;
+                             final String? targetNum = dep.trainNumber;
+                             
+                             // Fetch details if empty
+                             if (dep.stops == null) {
+                                trainProvider.expandTrainDetails(index);
+                             }
+                             
+                             showModalBottomSheet(
+                               context: context, 
+                               isScrollControlled: true,
+                               backgroundColor: Colors.transparent,
+                               barrierColor: Colors.black54,
+                               builder: (ctx) => Consumer<TrainProvider>(
+                                 builder: (context, provider, child) {
+                                   // Trova il treno aggiornato cercando per ID o numero treno
+                                   // Invece di usare l'indice che può cambiare nel tempo
+                                   final updatedDep = provider.departures.firstWhere(
+                                     (d) => (targetId != null && d.tripId == targetId) || 
+                                            (d.trainNumber == targetNum && d.destination == dep.destination),
+                                     orElse: () => dep,
+                                   );
+
+                                   return FractionallySizedBox(
+                                     heightFactor: 0.85,
+                                     child: TrainDetailsSheet(
+                                       departure: updatedDep,
+                                       isArrivalMode: isArrival,
+                                     ),
+                                   );
+                                 },
+                               )
+                             );
+                          },
+                          child: Padding(
+                            padding: const EdgeInsets.all(12.0),
+                            child: Row(
+                              children: [
+                                // Time Column
+                                Column(
                                   children: [
                                     Text(
-                                      "Arr: ${stop.arrival != null ? DateFormat('HH:mm').format(stop.arrival!) : '--'} | Dep: ${stop.departure != null ? DateFormat('HH:mm').format(stop.departure!) : '--'}",
-                                      style: const TextStyle(color: Colors.white54, fontSize: 12),
+                                      dep.scheduledTime != null ? _formatStationTime(dep.scheduledTime!, station.country) : '--:--',
+                                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18),
                                     ),
-                                    if (isDelayed) ...[
-                                      const SizedBox(width: 8),
-                                      Text(
-                                        "+${stop.delay}'",
-                                        style: const TextStyle(color: Colors.redAccent, fontSize: 12, fontWeight: FontWeight.bold),
+                                    if (dep.isDelayed)
+                                      Container(
+                                        margin: const EdgeInsets.only(top: 4),
+                                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                        decoration: BoxDecoration(
+                                          color: Colors.redAccent.withOpacity(0.2),
+                                          borderRadius: BorderRadius.circular(4),
+                                        ),
+                                        child: Text(
+                                          "+${dep.delayMinutes}'",
+                                          style: const TextStyle(color: Colors.redAccent, fontSize: 12, fontWeight: FontWeight.bold),
+                                        ),
                                       ),
-                                    ]
                                   ],
                                 ),
-                                trailing: stop.platform != null ? Text(stop.platform!, style: const TextStyle(color: Colors.orangeAccent, fontSize: 12)) : null,
-                               );
-                             }).toList(),
-                          
-                          // Bottone per vedere sulla mappa
-                          Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                            child: ElevatedButton.icon(
-                              onPressed: () {
-                                final mapState = Provider.of<MapStateProvider>(context, listen: false);
-                                // Chiamata JavaScript per evidenziare il treno sulla mappa
-                                mapState.runJs("window.highlightTrain?.('${dep.trainNumber}', '${dep.tripId}');");
-                              },
-                              icon: const Icon(Icons.map, size: 18),
-                              label: const Text("Segui sulla Mappa"),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.blueAccent.withOpacity(0.2),
-                                foregroundColor: Colors.white,
-                                minimumSize: const Size(double.infinity, 36),
-                              ),
+                                const SizedBox(width: 16),
+                                
+                                // Info Column
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        "${dep.category ?? ''} ${dep.trainNumber ?? ''}",
+                                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
+                                      ),
+                                      const SizedBox(height: 2),
+                                      Row(
+                                        children: [
+                                          Icon(isArrival ? Icons.arrow_back : Icons.arrow_forward, color: Colors.white54, size: 12),
+                                          const SizedBox(width: 4),
+                                          Expanded(
+                                            child: Text(
+                                              isArrival ? (dep.origin ?? '') : (dep.destination ?? ''),
+                                              style: const TextStyle(color: Colors.white70, fontSize: 13),
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        "Binario: ${dep.platform ?? '?'}",
+                                        style: const TextStyle(color: Colors.orangeAccent, fontSize: 12),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                
+                                // Action Icon
+                                const Icon(Icons.info_outline, color: Colors.blueAccent),
+                              ],
                             ),
                           ),
-                        ],
+                        ),
                       );
                     },
                   ),

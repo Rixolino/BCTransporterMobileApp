@@ -150,12 +150,32 @@ class TrainProvider with ChangeNotifier {
     }
 
     try {
-      _departures = await _repository.fetchDepartures(
+      final newDepartures = await _repository.fetchDepartures(
         stationId, 
         country: country, 
         service: _selectedService,
         isArrival: _isArrivalMode
       );
+
+      // Preserva le fermate (stops) se già caricate
+      if (_departures.isNotEmpty && newDepartures.isNotEmpty) {
+        for (int i = 0; i < newDepartures.length; i++) {
+          final newDep = newDepartures[i];
+          
+          // Cerca lo stesso treno nella vecchia lista
+          final oldDep = _departures.firstWhere(
+            (d) => (d.tripId != null && d.tripId == newDep.tripId) || 
+                   (d.trainNumber == newDep.trainNumber && d.destination == newDep.destination),
+            orElse: () => newDep,
+          );
+
+          if (newDep.stops == null && oldDep.stops != null) {
+            newDepartures[i] = newDep.copyWith(stops: oldDep.stops);
+          }
+        }
+      }
+
+      _departures = newDepartures;
     } catch (e) {
        print("Provider Error: $e");
        _departures = [];

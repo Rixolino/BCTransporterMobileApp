@@ -89,6 +89,8 @@ class TrainDeparture {
   final String? status;
   final String? tripId;
   final List<TrainStop>? stops;
+  final String country;
+  final Map<String, dynamic>? metadata;
 
   TrainDeparture({
     this.trainNumber,
@@ -102,6 +104,8 @@ class TrainDeparture {
     this.status,
     this.tripId,
     this.stops,
+    this.country = 'IT',
+    this.metadata,
   });
 
   factory TrainDeparture.fromJson(Map<String, dynamic> json, {bool isDeparture = true}) {
@@ -151,6 +155,8 @@ class TrainDeparture {
       status: _getStringValue(actualData['status']),
       tripId: actualData['tripId']?.toString() ?? actualData['id']?.toString(),
       stops: stops,
+      country: actualData['country']?.toString() ?? 'IT',
+      metadata: actualData['metadata'] as Map<String, dynamic>?,
     );
   }
 
@@ -177,6 +183,8 @@ class TrainDeparture {
 
   TrainDeparture copyWith({
     List<TrainStop>? stops,
+    String? country,
+    Map<String, dynamic>? metadata,
   }) {
     return TrainDeparture(
       trainNumber: trainNumber,
@@ -190,6 +198,8 @@ class TrainDeparture {
       status: status,
       tripId: tripId,
       stops: stops ?? this.stops,
+      country: country ?? this.country,
+      metadata: metadata ?? this.metadata,
     );
   }
 }
@@ -201,7 +211,10 @@ class TrainStop {
   final DateTime? estimatedArrival;
   final DateTime? estimatedDeparture;
   final int? delay;
+  final int? arrivalDelay;
+  final int? departureDelay;
   final String? platform;
+  final String country; // Country code (IT, FR, DE, CH, AT, etc.)
 
   TrainStop({
     required this.stationName,
@@ -210,7 +223,10 @@ class TrainStop {
     this.estimatedArrival,
     this.estimatedDeparture,
     this.delay,
+    this.arrivalDelay,
+    this.departureDelay,
     this.platform,
+    this.country = 'IT', // Default to Italy
   });
 
   static int? _parseInt(dynamic value) {
@@ -228,7 +244,10 @@ class TrainStop {
       estimatedArrival: _parse(json['estimatedArrival'] ?? json['actualArrival'] ?? json['prognosis']?['arrival']),
       estimatedDeparture: _parse(json['estimatedDeparture'] ?? json['actualDeparture'] ?? json['prognosis']?['departure']),
       delay: _parseInt(json['delay'] ?? json['arrivalDelay'] ?? json['departureDelay'] ?? 0),
+      arrivalDelay: _parseInt(json['arrivalDelay']),
+      departureDelay: _parseInt(json['departureDelay']),
       platform: TrainDeparture._getStringValue(json['platform'] ?? json['actualPlatform'] ?? json['plannedPlatform']),
+      country: TrainDeparture._getStringValue(json['country']) ?? 'IT',
     );
   }
 
